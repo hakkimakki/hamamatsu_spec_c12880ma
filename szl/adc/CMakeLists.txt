@@ -1,0 +1,4 @@
+if(CONFIG_SZL_ADC_ENABLE)
+	target_sources(app PRIVATE szl_adc.c)
+	target_include_directories(app PRIVATE ./)
+endif()
