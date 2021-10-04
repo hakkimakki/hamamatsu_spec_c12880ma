@@ -31,8 +31,14 @@ const struct device* portb;
 #define SPEC_CHANNELS    288 // New Spec Channel
 uint16_t data[SPEC_CHANNELS];
 
+uint32_t delayTime = 1; // delay time in us for CLK
+
 uint32_t min_integ_micros; //Minimal Integration Time
 uint32_t integ_time_us = 100; //Integration Time
+
+uint32_t timings[10];
+
+
 
 
 /*
@@ -49,17 +55,31 @@ void pulse_clock(int cycles){
 }
 
 /*
+ * Get passed time in ns (1 Rollover is OK!) -> 2³² / F_CPU = ~ 90s.
+ *
+*/
+uint32_t measure_us_one_rollover(uint32_t start_cycles, uint32_t stop_cycles){
+  if(start_cycles >= stop_cycles){
+    return k_ticks_to_us_floor32(1) + k_cyc_to_us_floor32(stop_cycles);
+  } else {
+    return k_cyc_to_us_floor32(stop_cycles - start_cycles);
+  }
+}
+
+
+
+/*
  * Clocking over a time
  *
 */
 void pulse_clock_timed(uint32_t duration_micros){
-  static uint32_t start_time;
+  static uint32_t start_cycles;
 
   /* capture initial time stamp */
-  start_time = k_cycle_get_32();
+  start_cycles = k_cycle_get_32();
 
   /* do work for some (short) period of time */
-  while ((duration_micros*1000) < SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32() - start_time)){
+  while ((duration_micros) > k_cyc_to_us_floor32(k_cycle_get_32()-start_cycles)){
     gpio_pin_set(porta, SPEC_CLK,(int)true);
     k_busy_wait(delayTime);
     gpio_pin_set(porta, SPEC_CLK,(int)false);
@@ -68,12 +88,18 @@ void pulse_clock_timed(uint32_t duration_micros){
 }
 
 void measure_min_integ_micros() {
-  static uint32_t start_time;
+  static uint32_t start_cycles, stop_cycles;
+
   /* capture initial time stamp */
-  start_time = k_cycle_get_32();
+  start_cycles = k_cycle_get_32();
+
   //48 clock cycles are required after ST goes low  
   pulse_clock(48);
-  min_integ_micros = SYS_CLOCK_HW_CYCLES_TO_NS(k_cycle_get_32() - start_time)*1000;
+  stop_cycles = k_cycle_get_32();
+    
+
+  min_integ_micros = measure_us_one_rollover(start_cycles,stop_cycles);
+  printk("Min. Integ. Time: %uus\n",min_integ_micros);
 }
 
 void set_integration_time(uint32_t microseconds) {
@@ -105,76 +131,43 @@ void setup(){
 */
 void readSpectrometer(){
 
-  uint32_t delayTime = 1; // delay time
+  //compute integration time
+  static uint32_t duration_micros;
+  duration_micros = integ_time_us;
+  if(integ_time_us >= min_integ_micros){
+    duration_micros -= min_integ_micros; //correction based on 48 pulses after ST goes low
+  } else {
+    duration_micros = 0;
+  } 
 
   // Start clock cycle and set start pulse to signal start
-  gpio_pin_set(porta, SPEC_CLK,(int)false);
-  k_busy_wait(delayTime);
   gpio_pin_set(porta, SPEC_CLK,(int)true);
   k_busy_wait(delayTime);
   gpio_pin_set(porta, SPEC_CLK,(int)false);
   gpio_pin_set(porta, SPEC_ST,(int)true);
   k_busy_wait(delayTime);
 
-  //Sample for a period of time
-  for(int i = 0; i < 15; i++){
-
-      gpio_pin_set(porta, SPEC_CLK,(int)true);
-      k_busy_wait(delayTime);
-      gpio_pin_set(porta, SPEC_CLK,(int)false);
-      k_busy_wait(delayTime); 
- 
-  }
-
-  //Set SPEC_ST to low
+  //pixel integration starts after three clock pulses
+  pulse_clock(3);
+  timings[0] = k_cycle_get_32();
+  //Integrate pixels for a while
+  pulse_clock_timed(duration_micros);
+  //Set _ST_pin to low
   gpio_pin_set(porta, SPEC_ST,(int)false);
-
+  timings[1] = k_cycle_get_32();
   //Sample for a period of time
-  for(int i = 0; i < 85; i++){
-
-      gpio_pin_set(porta, SPEC_CLK,(int)true);
-      k_busy_wait(delayTime);
-      gpio_pin_set(porta, SPEC_CLK,(int)false);
-      k_busy_wait(delayTime); 
-      
-  }
-
-
-
-  //One more clock pulse before the actual read
-  gpio_pin_set(porta, SPEC_CLK,(int)true);
-  k_busy_wait(delayTime);
-  gpio_pin_set(porta, SPEC_CLK,(int)false);
-  k_busy_wait(delayTime);
-
+  //integration stops at pulse 48 th pulse after ST went low
+  pulse_clock(48);
+  timings[2] = k_cycle_get_32();
+  //pixel output is ready after last pulse #88 after ST wen low
+  pulse_clock(40);
+  timings[3] = k_cycle_get_32();
   //Read from SPEC_VIDEO
   for(int i = 0; i < SPEC_CHANNELS; i++){
-
-      data[i] = (uint16_t)readOneChannel(SPEC_VIDEO);
-      
-      gpio_pin_set(porta, SPEC_CLK,(int)true);
-      k_busy_wait(delayTime);
-      gpio_pin_set(porta, SPEC_CLK,(int)false);
-      k_busy_wait(delayTime);
-        
+    data[i] = readOneChannel(SPEC_VIDEO);
+    pulse_clock(1);
   }
-
-  //Set SPEC_ST to high
-  gpio_pin_set(portb, SPEC_ST,(int)true);
-
-  //Sample for a small amount of time
-  for(int i = 0; i < 7; i++){
-    
-      gpio_pin_set(porta, SPEC_CLK,(int)true);
-      k_busy_wait(delayTime);
-      gpio_pin_set(porta, SPEC_CLK,(int)false);
-      k_busy_wait(delayTime);
-    
-  }
-
-  gpio_pin_set(porta, SPEC_CLK,(int)true);
-  k_busy_wait(delayTime);
-  
+  timings[4] = k_cycle_get_32(); 
 }
 
 
@@ -184,6 +177,8 @@ void readSpectrometer(){
  * processing plot
  */
 void printData(){
+
+  printk("<data>,");
   
   for (int i = 0; i < SPEC_CHANNELS; i++){
     
@@ -215,6 +210,7 @@ void main(void) {
 	}
 
   //Init Application
+  k_sleep(K_MSEC(5000));
   printk("Init Application...\n"); 
   setup();
 
