@@ -6,6 +6,7 @@
 
 //For ADC
 #include <szl_adc.h>
+#include <drivers/adc.h>
 
 // For USB CDC AACM 
 #include <usb/usb_device.h>
@@ -114,6 +115,7 @@ void setup(){
   //Set desired pins to OUTPUT
   gpio_pin_configure(porta, SPEC_CLK, GPIO_OUTPUT); 
   gpio_pin_configure(porta, SPEC_ST, GPIO_OUTPUT); 
+  gpio_pin_configure(porta, 2, GPIO_INPUT);
 
   gpio_pin_set(porta, SPEC_CLK,(int)true); // Set SPEC_CLK High
   gpio_pin_set(porta, SPEC_CLK,(int)false); // Set SPEC_CLK Low
@@ -164,7 +166,7 @@ void readSpectrometer(){
   timings[3] = k_cycle_get_32();
   //Read from SPEC_VIDEO
   for(int i = 0; i < SPEC_CHANNELS; i++){
-    data[i] = readOneChannel(SPEC_VIDEO);
+    data[i] = szl_adc_readOneChannel(SPEC_VIDEO);
     pulse_clock(1);
   }
   timings[4] = k_cycle_get_32(); 
@@ -217,7 +219,11 @@ void main(void) {
   // Start Application
   printk("Starting Application...\n"); 
   while(1){
-    loop();
+    //loop();
+    static int32_t raw_value;
+    raw_value = szl_adc_readOneChannel(0);
+    printk("ADC: %u -> %dmV\n",raw_value,szl_adc_raw_to_millivolts(raw_value));
+    k_sleep(K_MSEC(1000));
   }  
 }
 

@@ -24,10 +24,10 @@
 /* Default COnfiguration (should work with most ADCs */
 //#define ADC_NODE		DT_PHANDLE(DT_PATH(zephyr_user), io_channels)
 #define ADC_NODE_LABEL		"ADC_0"
-#define ADC_RESOLUTION		12
+#define ADC_RESOLUTION		10
 #define ADC_GAIN			ADC_GAIN_1
-#define ADC_REFERENCE		ADC_REF_EXTERNAL0
-#define ADC_ACQUISITION_TIME	ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)//ADC_ACQ_TIME_DEFAULT 
+#define ADC_REFERENCE		ADC_REF_INTERNAL//ADC_REF_EXTERNAL0
+#define ADC_ACQUISITION_TIME	ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 60)//ADC_ACQ_TIME_DEFAULT 
 #define BUFFER_SIZE			6
 #define BAD_ANALOG_READ -123
 
@@ -90,7 +90,7 @@ static const struct device* init_adc(int channel)
 // ------------------------------------------------
 // read one channel of adc
 // ------------------------------------------------
-int16_t readOneChannel(int channel)
+int16_t szl_adc_readOneChannel(int channel)
 {
 	const struct adc_sequence sequence = {
 		.options     = NULL,				// extra samples and callback
@@ -99,7 +99,7 @@ int16_t readOneChannel(int channel)
 		.buffer_size = sizeof(m_sample_buffer),
 		.resolution  = ADC_RESOLUTION,		// desired resolution
 		.oversampling = 0,					// don't oversample
-		.calibrate = 0						// don't calibrate
+		.calibrate = 1						// don't calibrate
 	};
 
 	int ret;
@@ -114,4 +114,12 @@ int16_t readOneChannel(int channel)
 		}
 	}
 	return sample_value;
+}
+
+int16_t szl_adc_raw_to_millivolts(int16_t raw_value)
+{
+	static const int b = 0; //mV Offset
+	static const float adc_rev = 1000; //mV Reference
+	static const float a = (adc_rev / ((1 << ADC_RESOLUTION)-1));
+	return a * raw_value + b;
 }

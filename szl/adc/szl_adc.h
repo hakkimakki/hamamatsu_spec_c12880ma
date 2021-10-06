@@ -27,7 +27,16 @@ extern "C" {
  *
  * @retval adc value or -123 on Bad Read.
  */
-int16_t readOneChannel(int channel);
+int16_t szl_adc_readOneChannel(int channel);
+
+/**
+ * @brief  Convert Raw Value to mV
+ *
+ * @param  raw_value: Raw value as got from szl_adc_readOneChannel.
+ *
+ * @retval adc value in mV
+ */
+int16_t szl_adc_raw_to_millivolts(int16_t raw_value);
 
 
 #ifdef __cplusplus
