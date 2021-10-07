@@ -24,7 +24,8 @@ BUILD_ASSERT(DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_console), zephyr_cdc_acm_uart),
 //#define SPEC_TRG         A0
 #define SPEC_ST          15 //PortA D5
 #define SPEC_CLK         18 //PortA D10
-#define SPEC_VIDEO       0 //Analog Channel 0
+#define SPEC_VIDEO       2 //Analog Channel PIN A1
+#define PHOTO_DIODE      0 //Analog Channel PIN A0
 
 const struct device* porta;
 const struct device* portb;
@@ -35,7 +36,7 @@ uint16_t data[SPEC_CHANNELS];
 uint32_t delayTime = 1; // delay time in us for CLK
 
 uint32_t min_integ_micros; //Minimal Integration Time
-uint32_t integ_time_us = 100; //Integration Time
+uint32_t integ_time_us = 0; //Integration Time
 
 uint32_t timings[10];
 
@@ -189,10 +190,17 @@ void printData(){
   }
   
   printk("\n");
+
+  static int32_t raw_value;
+  raw_value = szl_adc_readOneChannel(PHOTO_DIODE);
+  printk("<ADC_raw>%u\n",raw_value);
+  printk("<ADC_mV>%d\n",szl_adc_raw_to_millivolts(raw_value));
+  
 }
 
 void loop(){
-   
+  
+  set_integration_time(0);
   readSpectrometer();
   printData();
   k_sleep(K_SECONDS(1));  
@@ -219,11 +227,7 @@ void main(void) {
   // Start Application
   printk("Starting Application...\n"); 
   while(1){
-    //loop();
-    static int32_t raw_value;
-    raw_value = szl_adc_readOneChannel(0);
-    printk("ADC: %u -> %dmV\n",raw_value,szl_adc_raw_to_millivolts(raw_value));
-    k_sleep(K_MSEC(1000));
+    loop();
   }  
 }
 

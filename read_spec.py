@@ -1,4 +1,5 @@
 import os
+from termios import NOFLSH
 import time
 import datetime
 import serial
@@ -7,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from pylab import *
 
-COM_PORT = 'COM13'
+COM_PORT = '/dev/ttyACM0'
 
 dirpath = os.getcwd() + '\\result_files'
 
@@ -34,7 +35,7 @@ def read_all_lines(port):
 
 #Get the COM Ports
 ser = serial.Serial(COM_PORT, 115200,timeout=0.5)
-ser.set_buffer_size(rx_size = 12800, tx_size = 12800)
+#ser.set_buffer_size(rx_size = 12800, tx_size = 12800)
 
 #Wavelength Calculation
 pix=arange(1,289);
@@ -72,12 +73,14 @@ line1, = ax.plot(xdata, ydata)
 while(True):
     line1.set_xdata(xdata)
     new_y = wait_for_data()
-    line1.set_ydata(new_y)
-
-    plt.ylim(0,max(new_y))
-    figure.canvas.draw()
     
-    figure.canvas.flush_events()        
+    if (new_y is not None):
+        line1.set_ydata(new_y)
+
+        plt.ylim(0,max(new_y))
+        figure.canvas.draw()
+        
+        figure.canvas.flush_events()        
             
 
     
