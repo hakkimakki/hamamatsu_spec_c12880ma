@@ -25,8 +25,8 @@
 //#define ADC_NODE		DT_PHANDLE(DT_PATH(zephyr_user), io_channels)
 #define ADC_NODE_LABEL		"ADC_0"
 #define ADC_RESOLUTION		10
-#define ADC_GAIN			ADC_GAIN_1_2//ADC_GAIN_1
-#define ADC_REFERENCE		ADC_REF_VDD_1_2//ADC_REF_VDD_1//ADC_REF_INTERNAL//ADC_REF_EXTERNAL0
+#define ADC_GAIN			ADC_GAIN_1//ADC_GAIN_1_2
+#define ADC_REFERENCE		ADC_REF_EXTERNAL0//ADC_REF_VDD_1_2//ADC_REF_VDD_1// ADC_REF_INTERNAL
 #define ADC_ACQUISITION_TIME	ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 60)//ADC_ACQ_TIME_DEFAULT 
 #define BUFFER_SIZE			6
 #define BAD_ANALOG_READ -123
@@ -127,8 +127,8 @@ int16_t szl_adc_readOneChannel(int channel)
 
 int16_t szl_adc_raw_to_millivolts(int16_t raw_value)
 {
-	static const int b = 0; //mV Offset
-	static const float adc_rev = 3300; //mV Reference
+	static const int b = -19; //mV Offset
+	static const float adc_rev = 3284; //mV Reference
 	static const float a = (adc_rev / ((1 << ADC_RESOLUTION)-1));
 	return a * raw_value + b;
 }

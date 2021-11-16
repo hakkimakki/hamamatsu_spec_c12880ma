@@ -77,7 +77,7 @@ while(True):
     if (new_y is not None):
         line1.set_ydata(new_y)
 
-        plt.ylim(0,max(new_y))
+        plt.ylim(min(new_y),max(new_y))
         figure.canvas.draw()
         
         figure.canvas.flush_events()        

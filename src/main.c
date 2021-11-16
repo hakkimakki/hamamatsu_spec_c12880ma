@@ -17,7 +17,10 @@ BUILD_ASSERT(DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_console), zephyr_cdc_acm_uart),
 //For stdlib
 #include <stdbool.h>
 
+//For Counter
+#include <drivers/counter.h>
 
+#define TIMER DT_LABEL(DT_NODELABEL(tc4))
 
 
 
@@ -29,16 +32,48 @@ BUILD_ASSERT(DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_console), zephyr_cdc_acm_uart),
 
 const struct device* porta;
 const struct device* portb;
+const struct device* counter;
 
 #define SPEC_CHANNELS    288 // New Spec Channel
-uint16_t data[SPEC_CHANNELS];
+int16_t data[SPEC_CHANNELS];
 
 uint32_t delayTime = 1; // delay time in us for CLK
 
 uint32_t min_integ_micros; //Minimal Integration Time
 uint32_t integ_time_us = 0; //Integration Time
+uint32_t duration_micros;
 
-uint32_t timings[10];
+uint32_t intg_start;
+uint32_t intg_stop;
+
+
+
+void stopresetStartCounter(){
+  counter_stop(counter);
+  static const struct counter_top_cfg cfg = {.ticks = 0xFFFFFFFF};
+  counter_set_top_value(counter,&cfg);
+  counter_start(counter);
+}
+
+uint32_t readCounter_us(){
+  static uint32_t tcks;
+  counter_get_value(counter,&tcks);
+  return counter_ticks_to_us(counter,tcks);
+}
+
+
+
+/*
+ * Function for precise delay with cycle counter polling.
+*/
+void prec_delay(uint32_t micros) {
+  static uint32_t start;
+  start = readCounter_us();
+  while (micros > (readCounter_us() - start))
+  {
+    ;
+  }  
+}
 
 
 
@@ -48,70 +83,58 @@ uint32_t timings[10];
  *
 */
 void pulse_clock(int cycles){
-  for(int i = 0; i < cycles; i++){
+  static int i;
+  for(i = 0; i < cycles; i++){
     gpio_pin_set(porta, SPEC_CLK,(int)true);
-    k_busy_wait(delayTime);
+    prec_delay(delayTime);
     gpio_pin_set(porta, SPEC_CLK,(int)false);
-    k_busy_wait(delayTime);
+    prec_delay(delayTime);
   }
 }
-
-/*
- * Get passed time in ns (1 Rollover is OK!) -> 2³² / F_CPU = ~ 90s.
- *
-*/
-uint32_t measure_us_one_rollover(uint32_t start_cycles, uint32_t stop_cycles){
-  if(start_cycles >= stop_cycles){
-    return k_ticks_to_us_floor32(1) + k_cyc_to_us_floor32(stop_cycles);
-  } else {
-    return k_cyc_to_us_floor32(stop_cycles - start_cycles);
-  }
-}
-
-
 
 /*
  * Clocking over a time
  *
 */
 void pulse_clock_timed(uint32_t duration_micros){
-  static uint32_t start_cycles;
+  static uint32_t start;
 
   /* capture initial time stamp */
-  start_cycles = k_cycle_get_32();
+  start = readCounter_us();
 
   /* do work for some (short) period of time */
-  while ((duration_micros) > k_cyc_to_us_floor32(k_cycle_get_32()-start_cycles)){
+  while ((duration_micros) > (readCounter_us()-start)){
     gpio_pin_set(porta, SPEC_CLK,(int)true);
-    k_busy_wait(delayTime);
+    prec_delay(delayTime);
     gpio_pin_set(porta, SPEC_CLK,(int)false);
-    k_busy_wait(delayTime);
+    prec_delay(delayTime);
   }
 }
 
 void measure_min_integ_micros() {
-  static uint32_t start_cycles, stop_cycles;
+
+  stopresetStartCounter();
+  static uint32_t start, stop;
 
   /* capture initial time stamp */
-  start_cycles = k_cycle_get_32();
-
+  start = readCounter_us();
   //48 clock cycles are required after ST goes low  
   pulse_clock(48);
-  stop_cycles = k_cycle_get_32();
-    
+  stop = readCounter_us();  
 
-  min_integ_micros = measure_us_one_rollover(start_cycles,stop_cycles);
-  printk("Min. Integ. Time: %uus\n",min_integ_micros);
+  min_integ_micros = stop-start;
 }
 
 void set_integration_time(uint32_t microseconds) {
   integ_time_us = microseconds;
+  duration_micros = microseconds;
 }
 
 void setup(){
 
   porta = device_get_binding("PORTA");
   portb = device_get_binding("PORTB");
+  counter = device_get_binding("TIMER_4");  
 
   //Set desired pins to OUTPUT
   gpio_pin_configure(porta, SPEC_CLK, GPIO_OUTPUT); 
@@ -126,53 +149,41 @@ void setup(){
 }
 
 
-
-
 /*
  * This functions reads spectrometer data from SPEC_VIDEO
  * Look at the Timing Chart in the Datasheet for more info
 */
 void readSpectrometer(){
-
-  //compute integration time
-  static uint32_t duration_micros;
-  duration_micros = integ_time_us;
-  if(integ_time_us >= min_integ_micros){
-    duration_micros -= min_integ_micros; //correction based on 48 pulses after ST goes low
-  } else {
-    duration_micros = 0;
-  } 
-
   // Start clock cycle and set start pulse to signal start
   gpio_pin_set(porta, SPEC_CLK,(int)true);
-  k_busy_wait(delayTime);
+  prec_delay(delayTime);
   gpio_pin_set(porta, SPEC_CLK,(int)false);
   gpio_pin_set(porta, SPEC_ST,(int)true);
-  k_busy_wait(delayTime);
+  prec_delay(delayTime); 
 
   //pixel integration starts after three clock pulses
   pulse_clock(3);
-  timings[0] = k_cycle_get_32();
+  //measure effective integration time 
+  intg_start = readCounter_us();
   //Integrate pixels for a while
-  pulse_clock_timed(duration_micros);
+  pulse_clock_timed(duration_micros); 
   //Set _ST_pin to low
   gpio_pin_set(porta, SPEC_ST,(int)false);
-  timings[1] = k_cycle_get_32();
-  //Sample for a period of time
   //integration stops at pulse 48 th pulse after ST went low
   pulse_clock(48);
-  timings[2] = k_cycle_get_32();
+  //stop measure eff intg time
+  intg_stop = readCounter_us();
   //pixel output is ready after last pulse #88 after ST wen low
   pulse_clock(40);
-  timings[3] = k_cycle_get_32();
+  //Read out the first sample to throw it away (high impedance input)
+  data[0] = szl_adc_readOneChannel(SPEC_VIDEO);
   //Read from SPEC_VIDEO
   for(int i = 0; i < SPEC_CHANNELS; i++){
-    data[i] = szl_adc_readOneChannel(SPEC_VIDEO);
+    //data[i] = szl_adc_raw_to_millivolts(szl_adc_readOneChannel(SPEC_VIDEO));
+    data[i] = (szl_adc_readOneChannel(SPEC_VIDEO));
     pulse_clock(1);
   }
-  timings[4] = k_cycle_get_32(); 
 }
-
 
 
 /*
@@ -181,30 +192,36 @@ void readSpectrometer(){
  */
 void printData(){
 
-  printk("<data>,");
-  
+  printk("<data>,");  
   for (int i = 0; i < SPEC_CHANNELS; i++){
     
-    printk("%u,",data[i]);
+    printk("%d,",data[i]);
     
   }
-  
   printk("\n");
+
+  printk("<minIntgTime_us>%u\n",min_integ_micros);
+  printk("<sollIntgTime_us>%u\n",duration_micros);
+  printk("<istIntgTime_us>%u\n",intg_stop - intg_start);
 
   static int32_t raw_value;
   raw_value = szl_adc_readOneChannel(PHOTO_DIODE);
   printk("<ADC_raw>%u\n",raw_value);
-  printk("<ADC_mV>%d\n",szl_adc_raw_to_millivolts(raw_value));
-  
+  printk("<ADC_mV>%d\n",szl_adc_raw_to_millivolts(raw_value)); 
+  printf("<ADC_uA>%f\n",((float)szl_adc_raw_to_millivolts(raw_value)/(float)1000/(float)100000)*(float)1e6);
+  printf("<ADC_W/m2 @ 530nm>%f\n",((float)szl_adc_raw_to_millivolts(raw_value)/(float)1000/(float)100000)*0.38/(2.16e-6));   
 }
 
 void loop(){
   
+  stopresetStartCounter();
   set_integration_time(0);
+  measure_min_integ_micros();
+  k_sched_lock();
   readSpectrometer();
+  k_sched_unlock();
   printData();
-  k_sleep(K_SECONDS(1));  
-   
+  k_sleep(K_SECONDS(1));    
 }
 
 
