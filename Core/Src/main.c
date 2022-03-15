@@ -47,6 +47,7 @@ COMP_HandleTypeDef hcomp1;
 DAC_HandleTypeDef hdac1;
 
 TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim7;
 
 UART_HandleTypeDef huart2;
 
@@ -63,6 +64,7 @@ static void MX_ADC1_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_COMP1_Init(void);
 static void MX_DAC1_Init(void);
+static void MX_TIM7_Init(void);
 /* USER CODE BEGIN PFP */
 #ifdef __GNUC__
 #define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
@@ -96,6 +98,7 @@ void readDiodes (void)
 	const double Rph = 0.34; //Bei 532nm in A/W
 	const double RT = 47e3; //Transimpedanz Verstärkeungsfaktor in Ohm
 	//Define Working Variables
+	uint32_t raw_val;
 	double U_val;
 	double I_val;
 	double P_val;
@@ -105,31 +108,31 @@ void readDiodes (void)
 	HAL_Delay(1);
 	HAL_ADC_Stop_DMA(&hadc1); // stop adc in DMA mode
 	//Get ADC LTA
-	U_val = adc_raw[0];
-	U_val *= 3.35;
+	raw_val = adc_raw[0];
+	U_val = raw_val * 3.35;
 	U_val /= 4096;
-	U_val += 0.05;
-	printf("<LTA>%fV,",U_val);
+	printf("<LTA>,%fV,",U_val);
 	I_val = U_val/RT;
 	printf("%fuA,",I_val*1e6);
 	P_val = I_val / Rph;
 	printf("%fuW,",P_val*1e6);
 	E_val = P_val / Aph;
 	E_LTA = E_val;
-	printf("%fW/m2\n\r",E_val);
+	printf("%fW/m2,",E_val);
+	printf("%lu\n\r",raw_val);
 	//Get ADC WTA
-	U_val = adc_raw[1];
-	U_val *= 3.35;
+	raw_val = adc_raw[1];
+	U_val = raw_val * 3.35;
 	U_val /= 4096;
-	U_val += 0.05;
-	printf("<WTA>%fV,",U_val);
+	printf("<WTA>,%fV,",U_val);
 	I_val = U_val/RT;
 	printf("%fuA,",I_val*1e6);
 	P_val = I_val / Rph;
 	printf("%fuW,",P_val*1e6);
 	E_val = P_val / Aph;
 	E_WTA = E_val;
-	printf("%fW/m2\n\r",E_val);
+	printf("%fW/m2,",E_val);
+	printf("%lu\n\r",raw_val);
 }
 
 
@@ -138,7 +141,13 @@ void readDiodes (void)
 #define SPEC_CHANNELS    288 // New Spec Channel
 uint32_t spec_data[SPEC_CHANNELS];
 
-uint32_t delayTime = 100; // delay time in us for CLK
+
+#define int_time_per_clock 4 //Extra integration Time Per integration clock in us
+#define min_int_time 195 //us
+#define ctrl_p_stepsize 1.5 //Correction of 10 clock cycles per differenz
+uint32_t delayTime = 1; // delay time in us for CLK
+uint32_t int_clock_cycles = 0; // Variabel integration CLock Cycles
+uint32_t integration_time_us = 0; // Measured Integration Time
 
 
 void delay_us (uint16_t us)
@@ -147,14 +156,42 @@ void delay_us (uint16_t us)
 	while (__HAL_TIM_GET_COUNTER(&htim6) < us);  // wait for the counter to reach the us input in the parameter
 }
 
-void spec_pulse_clock(uint32_t pulses) {
-  for (uint32_t i = 0; i < pulses; i++)
+void spec_pulse_clock(uint16_t pulses) {
+  for (uint16_t i = 0; i < pulses; i++)
   {
 	  HAL_GPIO_WritePin(SPEC_CLK_GPIO_Port, SPEC_CLK_Pin, GPIO_PIN_SET);
 	  delay_us(delayTime);
 	  HAL_GPIO_WritePin(SPEC_CLK_GPIO_Port, SPEC_CLK_Pin, GPIO_PIN_RESET);
-	  delay_us(delayTime);
+	  //delay_us(delayTime);
   }
+}
+
+/*
+ * This functions optimizes the intgration time for the spec
+*/
+void set_int_cycles_Spectrometer(){
+	//static uint32_t last_cycles;
+	//Get Maximum and average of spectrum
+	static uint32_t avg,max;
+	max = 0;
+	avg = 0;
+	for (int i = 0; i < SPEC_CHANNELS; ++i) {
+		avg += spec_data[i];
+		if(spec_data[i] > max){
+			max = spec_data[i];
+		}
+	}
+	avg /= SPEC_CHANNELS;
+	//Adjust according to max value should be in Range of 1500 till 2500
+	if ((max > 2500)) {
+		if ((int_clock_cycles - ctrl_p_stepsize*(max-2500)) < 0) {
+			int_clock_cycles -= 10;
+		} else {
+			int_clock_cycles -= ctrl_p_stepsize*(max-2500);
+		}
+	} else if ((max < 1500)) {
+		int_clock_cycles += ctrl_p_stepsize*(1500-max);
+	}
 }
 
 
@@ -170,16 +207,16 @@ void readSpectrometer(){
   //pixel integration starts after three clock pulses
   spec_pulse_clock(3);
   //measure effective integration time
-  //tbd
+  __HAL_TIM_SET_COUNTER(&htim7,0);
   //Integrate pixels for a while
   //pulse_clock_timed(duration_micros);
-  spec_pulse_clock(100);
+  spec_pulse_clock(int_clock_cycles);
   //Set _ST_pin to low
   HAL_GPIO_WritePin(SPEC_ST_GPIO_Port, SPEC_ST_Pin, GPIO_PIN_RESET);
   //integration stops at pulse 48 th pulse after ST went low
   spec_pulse_clock(48);
   //stop measure eff intg time
-  //tbd
+  integration_time_us = __HAL_TIM_GET_COUNTER(&htim7);
   //pixel output is ready after last pulse #88 after ST wen low
   spec_pulse_clock(40);
   //Read out the first sample to throw it away (high impedance input)
@@ -206,6 +243,7 @@ void printSpectrometerData(){
     printf("%lu,",spec_data[i]);
   }
   printf("\n\r");
+  printf("<int_time_us>,%lu\n\r",integration_time_us);
 }
 
 /* USER CODE END 0 */
@@ -244,6 +282,7 @@ int main(void)
   MX_TIM6_Init();
   MX_COMP1_Init();
   MX_DAC1_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -252,6 +291,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   //Start Timer
   HAL_TIM_Base_Start(&htim6);
+  HAL_TIM_Base_Start(&htim7);
   //Start Comparator
   HAL_COMP_Start(&hcomp1);
   //Start Comparator
@@ -262,14 +302,16 @@ int main(void)
 		HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
 		HAL_Delay(250);
 
-		//Read Diodes
-		readDiodes();
+
 
 		//Update
 
 		//Read Spectrometer
 		readSpectrometer();
+		//Read Diodes
+		readDiodes();
 		printSpectrometerData();
+		set_int_cycles_Spectrometer();
 
 
     /* USER CODE END WHILE */
@@ -360,7 +402,7 @@ static void MX_ADC1_Init(void)
   /** Common config
   */
   hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
@@ -410,6 +452,8 @@ static void MX_ADC1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN ADC1_Init 2 */
+
+  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
   /* USER CODE END ADC1_Init 2 */
 
@@ -527,6 +571,44 @@ static void MX_TIM6_Init(void)
   /* USER CODE BEGIN TIM6_Init 2 */
 
   /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief TIM7 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM7_Init(void)
+{
+
+  /* USER CODE BEGIN TIM7_Init 0 */
+
+  /* USER CODE END TIM7_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM7_Init 1 */
+
+  /* USER CODE END TIM7_Init 1 */
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 32-1;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = 0xffff-1;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim7, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM7_Init 2 */
+
+  /* USER CODE END TIM7_Init 2 */
 
 }
 
